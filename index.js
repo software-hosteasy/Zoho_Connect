@@ -1,39 +1,21 @@
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch"); // Or built-in `fetch` if using Node 18+
+const fetch = require("node-fetch"); // Or global fetch in Node 18+
 require("dotenv").config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Existing audit route
+// Combined Zoho + optional audit proxy
 app.post("/proxy", async (req, res) => {
-  const { listing_id } = req.body;
-
-  try {
-    const response = await fetch("https://your-external-api.com/audit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listing_id })
-    });
-
-    const data = await response.json();
-    res.status(200).json(data);
-  } catch (err) {
-    console.error("Audit API error:", err);
-    res.status(500).json({ error: "Failed to fetch audit" });
-  }
-});
-
-// 🔹 New Zoho CRM route
-app.post("/submit-to-zoho", async (req, res) => {
-  const { name, email, phone } = req.body;
+  const { listing_id, name, email, phone } = req.body;
 
   if (!name || !email || !phone) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
+  // 1️⃣ Submit to Zoho CRM
   try {
     const zohoResponse = await fetch("https://www.zohoapis.com/crm/v2/Leads", {
       method: "POST",
@@ -52,11 +34,30 @@ app.post("/submit-to-zoho", async (req, res) => {
 
     const zohoData = await zohoResponse.json();
 
-    if (zohoData.data && zohoData.data[0].code === "SUCCESS") {
-      res.status(200).json({ message: "Submitted to Zoho successfully", data: zohoData });
-    } else {
-      res.status(400).json({ error: "Zoho submission failed", details: zohoData });
+    if (!zohoData.data || zohoData.data[0].code !== "SUCCESS") {
+      return res.status(400).json({ error: "Zoho submission failed", details: zohoData });
     }
+
+    // 2️⃣ Optional audit request (only if listing_id is provided)
+    if (listing_id) {
+      try {
+        const auditRes = await fetch("https://your-external-api.com/audit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ listing_id })
+        });
+
+        const auditData = await auditRes.json();
+        console.log("Audit success:", auditData);
+      } catch (auditError) {
+        console.warn("Audit failed:", auditError.message);
+        // We don't stop the response if audit fails
+      }
+    }
+
+    // ✅ Final success response
+    res.status(200).json({ message: "Submitted to Zoho successfully", data: zohoData });
+
   } catch (error) {
     console.error("Zoho Error:", error);
     res.status(500).json({ error: "Error submitting to Zoho" });
