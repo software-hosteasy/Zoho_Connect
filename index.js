@@ -1,26 +1,58 @@
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch"); // Or global fetch in Node 18+
+const fetch = require("node-fetch");
 require("dotenv").config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Combined Zoho + optional audit proxy
-app.post("/proxy", async (req, res) => {
-  const { listing_id, name, email, phone } = req.body;
+let accessToken = process.env.ZOHO_ACCESS_TOKEN;
+
+// 🔁 Refresh token function
+async function refreshAccessToken() {
+  try {
+    const response = await fetch("https://accounts.zoho.com/oauth/v2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        refresh_token: process.env.ZOHO_REFRESH_TOKEN,
+        client_id: process.env.ZOHO_CLIENT_ID,
+        client_secret: process.env.ZOHO_CLIENT_SECRET,
+        grant_type: "refresh_token"
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.access_token) {
+      accessToken = data.access_token;
+      console.log("✅ Refreshed Zoho access token");
+    } else {
+      console.error("❌ Failed to refresh token", data);
+    }
+  } catch (err) {
+    console.error("Token refresh error:", err);
+  }
+}
+
+// 🔁 Ensure fresh token every 50 minutes
+setInterval(refreshAccessToken, 1000 * 60 * 50);
+refreshAccessToken(); // also refresh at startup
+
+// 🔹 Zoho CRM submission route
+app.post("/submit-to-zoho", async (req, res) => {
+  const { name, email, phone } = req.body;
 
   if (!name || !email || !phone) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  // 1️⃣ Submit to Zoho CRM
   try {
-    const zohoResponse = await fetch("https://www.zohoapis.com/crm/v2/Leads", {
+    const zohoRes = await fetch("https://www.zohoapis.com/crm/v2/Leads", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.ZOHO_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -32,38 +64,21 @@ app.post("/proxy", async (req, res) => {
       })
     });
 
-    const zohoData = await zohoResponse.json();
+    const zohoData = await zohoRes.json();
 
-    if (!zohoData.data || zohoData.data[0].code !== "SUCCESS") {
-      return res.status(400).json({ error: "Zoho submission failed", details: zohoData });
+    if (zohoData.data?.[0]?.code === "SUCCESS") {
+      res.status(200).json({ message: "Submitted to Zoho successfully", data: zohoData });
+    } else {
+      res.status(400).json({ error: "Zoho submission failed", details: zohoData });
     }
-
-    // 2️⃣ Optional audit request (only if listing_id is provided)
-    if (listing_id) {
-      try {
-        const auditRes = await fetch("https://your-external-api.com/audit", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ listing_id })
-        });
-
-        const auditData = await auditRes.json();
-        console.log("Audit success:", auditData);
-      } catch (auditError) {
-        console.warn("Audit failed:", auditError.message);
-        // We don't stop the response if audit fails
-      }
-    }
-
-    // ✅ Final success response
-    res.status(200).json({ message: "Submitted to Zoho successfully", data: zohoData });
-
-  } catch (error) {
-    console.error("Zoho Error:", error);
+  } catch (err) {
+    console.error("Zoho Error:", err);
     res.status(500).json({ error: "Error submitting to Zoho" });
   }
 });
 
-// Start the server
+// ✅ Add your audit logic here too (if needed)
+
+// 🔧 Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
