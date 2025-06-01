@@ -32,13 +32,13 @@ async function refreshAccessToken() {
       console.error("❌ Failed to refresh token", data);
     }
   } catch (err) {
-    console.error("Token refresh error:", err);
+    console.error("❌ Token refresh error:", err);
   }
 }
 
-// 🔁 Ensure fresh token every 50 minutes
+// 🔁 Refresh token every 50 minutes
 setInterval(refreshAccessToken, 1000 * 60 * 50);
-refreshAccessToken(); // also refresh at startup
+refreshAccessToken(); // refresh at server startup
 
 // 🔹 Zoho CRM submission route
 app.post("/submit-to-zoho", async (req, res) => {
@@ -48,8 +48,8 @@ app.post("/submit-to-zoho", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  try {
-    const zohoRes = await fetch("https://www.zohoapis.com/crm/v2/Leads", {
+  const makeZohoRequest = async () => {
+    return fetch("https://www.zohoapis.com/crm/v2/Leads", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -63,8 +63,19 @@ app.post("/submit-to-zoho", async (req, res) => {
         }]
       })
     });
+  };
 
-    const zohoData = await zohoRes.json();
+  try {
+    let zohoRes = await makeZohoRequest();
+    let zohoData = await zohoRes.json();
+
+    // If token is expired or invalid, try refreshing and retry once
+    if (zohoData.code === "INVALID_TOKEN" || zohoData.code === "AUTHENTICATION_FAILURE") {
+      console.warn("⚠️ Token expired. Refreshing...");
+      await refreshAccessToken();
+      zohoRes = await makeZohoRequest();
+      zohoData = await zohoRes.json();
+    }
 
     if (zohoData.data?.[0]?.code === "SUCCESS") {
       res.status(200).json({ message: "Submitted to Zoho successfully", data: zohoData });
@@ -72,13 +83,11 @@ app.post("/submit-to-zoho", async (req, res) => {
       res.status(400).json({ error: "Zoho submission failed", details: zohoData });
     }
   } catch (err) {
-    console.error("Zoho Error:", err);
+    console.error("❌ Zoho Error:", err);
     res.status(500).json({ error: "Error submitting to Zoho" });
   }
 });
 
-// ✅ Add your audit logic here too (if needed)
-
 // 🔧 Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
